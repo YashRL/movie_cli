@@ -42,7 +42,7 @@ QUALITY_PRESETS = ["lossless", "high", "medium", "web"]
 # Each command's arguments as a list of (name, optional) tuples for toolbar hints
 CMD_ARGS = {
     "/load":      [("file", False)],
-    "/trim":      [("start", False), ("end", False), ("as name", True)],
+    "/trim":      [("start", False), ("end", False), ("name", True)],
     "/blur":      [("start", False), ("end", False), ("intensity n", True)],
     "/spotlight": [("start", False), ("end", False), ("x…", False), ("y…", False), ("r…", True), ("dim 0.0-1.0", True)],
     "/text":      [("start", False), ("end", False), ('"text"', False), ("x…", False), ("y…", False), ("size n", True), ("color name", True)],
@@ -242,18 +242,34 @@ def handle_info(state: dict):
     _print_info(info, state["file"])
 
 
-def _resolve_output(args: list, state: dict, suffix: str) -> Path:
-    """Parse optional 'as <name>' from args, or auto-name in saves/."""
+def _resolve_output(args: list, state: dict, suffix: str, named_after_idx: int = None) -> Path:
+    """
+    Resolve output path from args.
+    Supports:
+      - 'as <name>'  anywhere in args
+      - bare name at position named_after_idx (e.g. after timestamps)
+    Always appends source extension if none given.
+    """
+    src_ext = state["file"].suffix
+
+    # explicit: as <name>
     if "as" in args:
         idx = args.index("as")
-        name = args[idx + 1] if idx + 1 < len(args) else None
-        if name:
+        if idx + 1 < len(args):
+            name = args[idx + 1]
             out = saves_dir() / name
-            if not out.suffix:
-                out = out.with_suffix(state["file"].suffix)
-            return out
-    stem = state["file"].stem + suffix
-    return saves_dir() / (stem + state["file"].suffix)
+            return out if out.suffix else out.with_suffix(src_ext)
+
+    # bare name: first arg at named_after_idx that isn't a keyword
+    KEYWORDS = {"as", "intensity", "quality", "at", "dim"}
+    if named_after_idx is not None and named_after_idx < len(args):
+        name = args[named_after_idx]
+        if name not in KEYWORDS:
+            out = saves_dir() / name
+            return out if out.suffix else out.with_suffix(src_ext)
+
+    # auto-name
+    return saves_dir() / (state["file"].stem + suffix + src_ext)
 
 
 def _run_ffmpeg_track(out: Path, state: dict, *cmd_args):
@@ -266,14 +282,14 @@ def _run_ffmpeg_track(out: Path, state: dict, *cmd_args):
 
 def handle_trim(args: list, state: dict):
     if not state.get("file") or len(args) < 2:
-        rprint("[red]Usage:[/red] /trim <start> <end> [as <name>]")
+        rprint("[red]Usage:[/red] /trim <start> <end> [name]")
         return
     try:
         t0, t1 = parse_ts(args[0]), parse_ts(args[1])
     except ValueError as e:
         rprint(f"[red]{e}[/red]"); return
 
-    out = _resolve_output(args, state, "_trimmed")
+    out = _resolve_output(args, state, "_trimmed", named_after_idx=2)
     duration = t1 - t0
     rprint(f"[cyan]Trimming[/cyan] {fmt_ts(t0)} → {fmt_ts(t1)} ({duration:.1f}s)")
     _run_ffmpeg_track(out, state,
